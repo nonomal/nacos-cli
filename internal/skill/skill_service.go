@@ -174,6 +174,9 @@ func (s *SkillService) getSkillWithValidation(skillName, outputDir string) error
 
 	// Download resources
 	resourceContents := make(map[string]map[string]interface{})
+	downloadedDataIDs := make(map[string]bool)
+	downloadedDataIDs["skill.json"] = true
+
 	for _, resourceInfo := range skill.Resources {
 		resourceName := resourceInfo["name"]
 		if resourceName == "" {
@@ -182,14 +185,21 @@ func (s *SkillService) getSkillWithValidation(skillName, outputDir string) error
 
 		resourceType := resourceInfo["type"]
 
-		// Construct dataId: resource_{type}_{name}.json
+		// Construct dataId: resource_{type}_{name}.json or resource_{name}.json if type is empty
 		// Replace . with __ in name (e.g., init_skill.py -> init_skill__py)
 		normalizedName := strings.ReplaceAll(resourceName, ".", "__")
-		resourceDataID := fmt.Sprintf("resource_%s_%s.json", resourceType, normalizedName)
+		var resourceDataID string
+		if resourceType != "" {
+			resourceDataID = fmt.Sprintf("resource_%s_%s.json", resourceType, normalizedName)
+		} else {
+			resourceDataID = fmt.Sprintf("resource_%s.json", normalizedName)
+		}
 		resourceJSON, err := s.client.GetConfig(resourceDataID, group)
 		if err != nil {
 			continue
 		}
+
+		downloadedDataIDs[resourceDataID] = true
 
 		var resourceData map[string]interface{}
 		if err := json.Unmarshal([]byte(resourceJSON), &resourceData); err != nil {
@@ -244,7 +254,7 @@ func (s *SkillService) getSkillWithValidation(skillName, outputDir string) error
 	}
 
 	// Generate SKILL.md
-	if err := s.generateSkillMD(skillDir, &skill, resourceContents); err != nil {
+	if err := s.generateSkillMD(skillDir, &skill); err != nil {
 		return err
 	}
 
@@ -252,7 +262,7 @@ func (s *SkillService) getSkillWithValidation(skillName, outputDir string) error
 }
 
 // generateSkillMD creates SKILL.md file
-func (s *SkillService) generateSkillMD(skillDir string, skill *Skill, resources map[string]map[string]interface{}) error {
+func (s *SkillService) generateSkillMD(skillDir string, skill *Skill) error {
 	var md strings.Builder
 
 	// YAML frontmatter
