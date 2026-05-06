@@ -62,8 +62,8 @@ func publishSingleSkill(skillPath string, skillService *skill.SkillService) {
 	err = skillService.UploadSkill(absPath)
 	checkError(err)
 
-	fmt.Printf("Skill published successfully!\n")
-	fmt.Printf("  Tip: Use the Nacos console to review and go online, or use 'skill-list' to verify.\n")
+	fmt.Printf("Skill draft published successfully!\n")
+	fmt.Printf("  Tip: Use 'skill-submit %s' to submit the draft for review.\n", skillName)
 }
 
 func publishAllSkills(folderPath string, skillService *skill.SkillService) {
@@ -132,7 +132,7 @@ func publishAllSkills(folderPath string, skillService *skill.SkillService) {
 	}
 	fmt.Printf("Total: %d\n", len(skillDirs))
 	fmt.Println()
-	fmt.Println("Tip: Use the Nacos console to review and go online, or use 'skill-list' to verify.")
+	fmt.Println("Tip: Use 'skill-submit <skillName>' to submit a draft for review.")
 }
 
 func init() {

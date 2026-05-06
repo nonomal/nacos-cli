@@ -64,7 +64,7 @@ var (
 
 	SkillPublish = CommandHelp{
 		Command:     "skill-publish",
-		Description: "Publish a skill to Nacos by uploading it as a ZIP file (creates a draft version).\nReview and go-online operations should be done via the Nacos console.",
+		Description: "Publish a skill to Nacos by uploading it as a ZIP file (creates a draft version).",
 		Parameters: []string{
 			"skillPath       Required. Path to the skill directory",
 			"--all           Publish all skills in the specified directory",
@@ -78,7 +78,27 @@ var (
 			"",
 			"Note:",
 			"  - Skill directory must contain SKILL.md",
-			"  - After publishing, use the Nacos console to review and go online",
+			"  - After publishing, use skill-submit to submit the draft for review",
+		},
+	}
+
+	SkillSubmit = CommandHelp{
+		Command:     "skill-submit",
+		Description: "Submit a skill draft version for review.",
+		Parameters: []string{
+			"skillName       Required. Skill name to submit",
+			"--version       Optional. Specific draft version to submit",
+		},
+		Examples: []string{
+			"# Submit the current draft",
+			"skill-submit my-skill",
+			"",
+			"# Submit a specific draft version",
+			"skill-submit my-skill --version 1.0.0",
+			"",
+			"Note:",
+			"  - If --version is omitted, the server submits the current editingVersion",
+			"  - Auto-publish after review depends on server configuration",
 		},
 	}
 
