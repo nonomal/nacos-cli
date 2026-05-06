@@ -13,22 +13,22 @@ import (
 )
 
 const (
-	DefaultConfigDir  = ".nacos-cli"
-	DefaultProfile    = "default"
-	ConfigFileSuffix  = ".conf"
+	DefaultConfigDir = ".nacos-cli"
+	DefaultProfile   = "default"
+	ConfigFileSuffix = ".conf"
 )
 
 // Config represents the Nacos CLI configuration
 type Config struct {
-	Host      string `yaml:"host"`
-	Port      int    `yaml:"port"`
-	AuthType  string `yaml:"authType"` // nacos | aliyun | token
-	Username  string `yaml:"username"`
-	Password  string `yaml:"password"`
-	Token     string `yaml:"token"`     // Pre-issued access token (skips username/password login)
-	AccessKey string `yaml:"accessKey"` // Aliyun AK（AuthType=aliyun 时使用）
-	SecretKey string `yaml:"secretKey"` // Aliyun SK
-	Namespace string `yaml:"namespace"`
+	Host          string `yaml:"host"`
+	Port          int    `yaml:"port"`
+	AuthType      string `yaml:"authType"` // nacos | aliyun | sts-hiclaw
+	Username      string `yaml:"username"`
+	Password      string `yaml:"password"`
+	AccessKey     string `yaml:"accessKey"`     // Aliyun AK (AuthType=aliyun)
+	SecretKey     string `yaml:"secretKey"`     // Aliyun SK (AuthType=aliyun)
+	SecurityToken string `yaml:"securityToken"` // STS SecurityToken (legacy)
+	Namespace     string `yaml:"namespace"`
 }
 
 // LoadConfig loads configuration from a file
@@ -127,11 +127,6 @@ func (c *Config) IsComplete() bool {
 		return false
 	}
 
-	// Token auth: only token is needed
-	if c.Token != "" {
-		return true
-	}
-
 	// Check based on auth type
 	authType := strings.ToLower(c.AuthType)
 
@@ -141,8 +136,12 @@ func (c *Config) IsComplete() bool {
 	}
 
 	if authType == "aliyun" {
-		// Aliyun auth requires AccessKey and SecretKey
 		return c.AccessKey != "" && c.SecretKey != ""
+	}
+
+	if authType == "sts-url" || authType == "sts-hiclaw" {
+		// sts-hiclaw credentials are fetched dynamically from HICLAW_CONTROLLER_URL env var
+		return true
 	}
 
 	// Nacos auth requires username and password
@@ -155,11 +154,6 @@ func (c *Config) GetMissingFields() []string {
 
 	if c.Host == "" {
 		missing = append(missing, "host")
-	}
-
-	// Token auth: no other fields required
-	if c.Token != "" {
-		return missing
 	}
 
 	authType := strings.ToLower(c.AuthType)
@@ -176,6 +170,8 @@ func (c *Config) GetMissingFields() []string {
 		if c.SecretKey == "" {
 			missing = append(missing, "secretKey")
 		}
+	} else if authType == "sts-url" || authType == "sts-hiclaw" {
+		// sts-hiclaw credentials are fetched dynamically; no config fields required
 	} else {
 		// Nacos auth
 		if c.Username == "" {
@@ -264,7 +260,7 @@ func (c *Config) PromptForMissingFields() error {
 
 	// Prompt for auth type if not set
 	if c.AuthType == "" {
-		fmt.Print("Enter auth type (none/nacos/aliyun) [none]: ")
+		fmt.Print("Enter auth type (none/nacos/aliyun/sts-hiclaw) [none]: ")
 		input, err := reader.ReadString('\n')
 		if err != nil {
 			return fmt.Errorf("failed to read auth type: %w", err)
@@ -272,10 +268,13 @@ func (c *Config) PromptForMissingFields() error {
 		input = strings.TrimSpace(strings.ToLower(input))
 		if input == "" {
 			c.AuthType = "none"
-		} else if input == "none" || input == "nacos" || input == "aliyun" {
+		} else if input == "none" || input == "nacos" || input == "aliyun" || input == "sts-hiclaw" || input == "sts-url" {
+			if input == "sts-url" {
+				input = "sts-hiclaw"
+			}
 			c.AuthType = input
 		} else {
-			return fmt.Errorf("invalid auth type: %s (must be 'none', 'nacos' or 'aliyun')", input)
+			return fmt.Errorf("invalid auth type: %s (must be 'none', 'nacos', 'aliyun' or 'sts-hiclaw')", input)
 		}
 	}
 
@@ -289,14 +288,14 @@ func (c *Config) PromptForMissingFields() error {
 			}
 			c.AccessKey = strings.TrimSpace(input)
 			if c.AccessKey == "" {
-				return fmt.Errorf("access key is required for aliyun auth")
+				return fmt.Errorf("access key is required for %s auth", c.AuthType)
 			}
 		}
 		if c.SecretKey == "" {
 			fmt.Print("Enter SecretKey: ")
 			c.SecretKey = readPassword(reader)
 			if c.SecretKey == "" {
-				return fmt.Errorf("secret key is required for aliyun auth")
+				return fmt.Errorf("secret key is required for %s auth", c.AuthType)
 			}
 		}
 	} else if c.AuthType == "nacos" {
@@ -460,15 +459,18 @@ func (c *Config) PromptForUpdate() error {
 	if currentAuthType == "" {
 		currentAuthType = "none"
 	}
-	fmt.Printf("Enter auth type (none/nacos/aliyun) [%s]: ", currentAuthType)
+	fmt.Printf("Enter auth type (none/nacos/aliyun/sts-hiclaw) [%s]: ", currentAuthType)
 	input, err = reader.ReadString('\n')
 	if err != nil {
 		return fmt.Errorf("failed to read auth type: %w", err)
 	}
 	input = strings.TrimSpace(strings.ToLower(input))
 	if input != "" {
-		if input != "none" && input != "nacos" && input != "aliyun" {
-			return fmt.Errorf("invalid auth type: %s (must be 'none', 'nacos' or 'aliyun')", input)
+		if input != "none" && input != "nacos" && input != "aliyun" && input != "sts-hiclaw" && input != "sts-url" {
+			return fmt.Errorf("invalid auth type: %s (must be 'none', 'nacos', 'aliyun' or 'sts-hiclaw')", input)
+		}
+		if input == "sts-url" {
+			input = "sts-hiclaw"
 		}
 		c.AuthType = input
 	} else if c.AuthType == "" {
@@ -493,7 +495,7 @@ func (c *Config) PromptForUpdate() error {
 			c.AccessKey = input
 		}
 		if c.AccessKey == "" {
-			return fmt.Errorf("access key is required for aliyun auth")
+			return fmt.Errorf("access key is required for %s auth", c.AuthType)
 		}
 
 		// SecretKey
@@ -507,8 +509,11 @@ func (c *Config) PromptForUpdate() error {
 			c.SecretKey = newSK
 		}
 		if c.SecretKey == "" {
-			return fmt.Errorf("secret key is required for aliyun auth")
+			return fmt.Errorf("secret key is required for %s auth", c.AuthType)
 		}
+	} else if c.AuthType == "sts-hiclaw" {
+		// sts-hiclaw: credentials fetched dynamically from HICLAW_CONTROLLER_URL env var
+		fmt.Println("Note: sts-hiclaw credentials are obtained from HICLAW_CONTROLLER_URL and HICLAW_AUTH_TOKEN_FILE environment variables.")
 	} else if c.AuthType == "nacos" {
 		// Nacos auth - Username
 		currentUser := formatCurrent(c.Username, false)

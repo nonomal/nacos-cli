@@ -12,18 +12,21 @@ import (
 )
 
 var (
-	serverAddr  string
-	host        string
-	port        int
-	namespace   string
-	authType    string
-	username    string
-	password    string
-	token       string
-	accessKey   string
-	secretKey   string
-	configFile  string
-	profileName string // Profile name for config file (default, dev, prod, etc.)
+	serverAddr    string
+	host          string
+	port          int
+	namespace     string
+	authType      string
+	username      string
+	password      string
+	accessKey     string
+	secretKey     string
+	securityToken string
+	stsURL        string
+	stsAuthToken  string
+	configFile    string
+	profileName   string // Profile name for config file (default, dev, prod, etc.)
+	verbose       bool   // Enable verbose/debug output
 )
 
 var rootCmd = &cobra.Command{
@@ -56,7 +59,7 @@ Examples:
 		var err error
 
 		// Check if any connection parameters are provided via command line
-		hasCommandLineConfig := host != "" || port > 0 || serverAddr != "" || username != "" || password != "" || token != "" || accessKey != "" || secretKey != ""
+		hasCommandLineConfig := host != "" || port > 0 || serverAddr != "" || username != "" || password != "" || accessKey != "" || secretKey != "" || securityToken != "" || authType == "sts-hiclaw"
 
 		if configFile != "" {
 			// Explicit config file specified
@@ -106,9 +109,14 @@ Examples:
 			namespace = fileConfig.Namespace
 		}
 
-		// AuthType: command line > config file > auto-detect by NewNacosClient
+		// AuthType: command line > config file > env var > auto-detect by NewNacosClient
 		if authType == "" && fileConfig != nil && fileConfig.AuthType != "" {
 			authType = fileConfig.AuthType
+		}
+		if authType == "" {
+			if envAuthType := os.Getenv("NACOS_AUTH_TYPE"); envAuthType != "" {
+				authType = envAuthType
+			}
 		}
 
 		// Username: command line > config file
@@ -121,27 +129,73 @@ Examples:
 			password = fileConfig.Password
 		}
 
-		// Token: command line > config file (token takes priority over username/password when set)
-		if token == "" && fileConfig != nil && fileConfig.Token != "" {
-			token = fileConfig.Token
-		}
-		// If token is provided, clear username/password defaults to avoid unnecessary login attempts
-		if token != "" {
-			username = ""
-			password = ""
-		}
-
-		// AccessKey / SecretKey: command line > config file（AuthType=aliyun 时使用）
+		// AccessKey / SecretKey / SecurityToken: command line > config file
 		if accessKey == "" && fileConfig != nil {
 			accessKey = fileConfig.AccessKey
 		}
 		if secretKey == "" && fileConfig != nil {
 			secretKey = fileConfig.SecretKey
 		}
+		if securityToken == "" && fileConfig != nil {
+			securityToken = fileConfig.SecurityToken
+		}
 
 		// Set default server address only when neither --host nor --port is provided.
 		if serverAddr == "" {
 			serverAddr = "market.hiclaw.io:80"
+		}
+
+		// For sts-hiclaw auth, read HICLAW_CONTROLLER_URL and HICLAW_AUTH_TOKEN_FILE from environment variables
+		if authType == "sts-hiclaw" {
+			if stsURL == "" {
+				controllerURL := os.Getenv("HICLAW_CONTROLLER_URL")
+				if controllerURL != "" {
+					stsURL = strings.TrimRight(controllerURL, "/") + "/api/v1/credentials/sts"
+				}
+			}
+			if stsAuthToken == "" {
+				tokenFile := os.Getenv("HICLAW_AUTH_TOKEN_FILE")
+				if tokenFile != "" {
+					data, err := os.ReadFile(tokenFile)
+					if err != nil {
+						fmt.Fprintf(os.Stderr, "Error: failed to read HICLAW_AUTH_TOKEN_FILE (%s): %v\n", tokenFile, err)
+						os.Exit(1)
+					}
+					stsAuthToken = strings.TrimSpace(string(data))
+				}
+			}
+			if stsURL == "" || stsAuthToken == "" {
+				fmt.Fprintf(os.Stderr, "Error: sts-hiclaw auth requires HICLAW_CONTROLLER_URL and HICLAW_AUTH_TOKEN_FILE environment variables\n")
+				os.Exit(1)
+			}
+		} else if authType == "" && os.Getenv("HICLAW_CONTROLLER_URL") != "" && os.Getenv("HICLAW_AUTH_TOKEN_FILE") != "" {
+			// Auto-detect sts-hiclaw auth from environment variables
+			authType = "sts-hiclaw"
+			controllerURL := os.Getenv("HICLAW_CONTROLLER_URL")
+			stsURL = strings.TrimRight(controllerURL, "/") + "/api/v1/credentials/sts"
+			tokenFile := os.Getenv("HICLAW_AUTH_TOKEN_FILE")
+			data, err := os.ReadFile(tokenFile)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Error: failed to read HICLAW_AUTH_TOKEN_FILE (%s): %v\n", tokenFile, err)
+				os.Exit(1)
+			}
+			stsAuthToken = strings.TrimSpace(string(data))
+		}
+
+		if verbose {
+			fmt.Fprintf(os.Stderr, "[debug] authType=%s\n", authType)
+			fmt.Fprintf(os.Stderr, "[debug] serverAddr=%s\n", serverAddr)
+			fmt.Fprintf(os.Stderr, "[debug] namespace=%s\n", namespace)
+			if stsURL != "" {
+				fmt.Fprintf(os.Stderr, "[debug] stsURL=%s\n", stsURL)
+			}
+			if stsAuthToken != "" {
+				masked := stsAuthToken
+				if len(masked) > 10 {
+					masked = masked[:10] + "..."
+				}
+				fmt.Fprintf(os.Stderr, "[debug] stsAuthToken=%s\n", masked)
+			}
 		}
 	},
 	Run: func(cmd *cobra.Command, args []string) {
@@ -175,12 +229,13 @@ func init() {
 	// Global flags - legacy style (for backward compatibility)
 	rootCmd.PersistentFlags().StringVarP(&serverAddr, "server", "s", "", "Nacos server address (e.g., market.hiclaw.io:80)")
 	rootCmd.PersistentFlags().StringVarP(&namespace, "namespace", "n", "", "Namespace ID")
-	rootCmd.PersistentFlags().StringVar(&authType, "auth-type", "", "Auth type: nacos (username/password) or aliyun (AK/SK)")
+	rootCmd.PersistentFlags().StringVar(&authType, "auth-type", "", "Auth type: nacos | aliyun | sts-hiclaw")
 	rootCmd.PersistentFlags().StringVarP(&username, "username", "u", "", "Username (nacos auth)")
 	rootCmd.PersistentFlags().StringVarP(&password, "password", "p", "", "Password (nacos auth)")
-	rootCmd.PersistentFlags().StringVar(&token, "token", "", "Access token (skips username/password login)")
-	rootCmd.PersistentFlags().StringVar(&accessKey, "access-key", "", "AccessKey (aliyun auth)")
-	rootCmd.PersistentFlags().StringVar(&secretKey, "secret-key", "", "SecretKey (aliyun auth)")
+	rootCmd.PersistentFlags().StringVar(&accessKey, "access-key", "", "AccessKey (aliyun/sts-hiclaw auth)")
+	rootCmd.PersistentFlags().StringVar(&secretKey, "secret-key", "", "SecretKey (aliyun/sts-hiclaw auth)")
+	rootCmd.PersistentFlags().StringVar(&securityToken, "security-token", "", "STS SecurityToken (sts-hiclaw auth)")
+	rootCmd.PersistentFlags().BoolVar(&verbose, "verbose", false, "Enable verbose/debug output")
 
 	// Mark legacy server flag as deprecated but still functional
 	rootCmd.PersistentFlags().MarkDeprecated("server", "use --host and --port instead")
@@ -195,7 +250,9 @@ func checkError(err error) {
 
 // mustNewNacosClient creates a NacosClient and exits with a clear error message on failure (e.g. login failed).
 func mustNewNacosClient() *client.NacosClient {
-	c, err := client.NewNacosClient(serverAddr, namespace, authType, username, password, accessKey, secretKey, token)
+	c, err := client.NewNacosClient(serverAddr, namespace, authType, username, password, accessKey, secretKey, securityToken, stsURL, stsAuthToken, func(c *client.NacosClient) {
+		c.Verbose = verbose
+	})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
